@@ -1,0 +1,24 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - name: Show Swift version
+        run: swift --version
+      - name: Build
+        run: swift build --build-tests
+      - name: Run tests
+        run: swift test --skip-build
+      - name: Build for iOS
+        run: xcodebuild -scheme FBXGLTF -destination "generic/platform=iOS Simulator" build
