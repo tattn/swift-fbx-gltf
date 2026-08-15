@@ -15,8 +15,8 @@ struct SceneData {
         var childIndices: [Int] = []
     }
 
-    /// Optional attributes are empty rather than nil, so that appending to one
-    /// the mesh does not have cannot be silently dropped.
+    /// Optional attributes are empty rather than nil, so that appending to an
+    /// attribute the mesh does not have cannot be silently dropped.
     struct Primitive {
         var positions: [Float] = [] // xyz triplets
         var normals: [Float] = [] // xyz triplets
@@ -61,7 +61,7 @@ struct SceneData {
         struct Channel {
             var nodeIndex: Int
             var path: Path
-            var times: [Float] // seconds, starting at zero
+            var times: [Float] // ascending seconds, starting at zero
             var values: [Float] // xyz triplets, or xyzw for rotation
         }
 
@@ -69,7 +69,7 @@ struct SceneData {
         /// glTF animates the weights of every node instancing that mesh.
         struct WeightTrack {
             var meshIndex: Int
-            var times: [Float] // seconds, starting at zero
+            var times: [Float] // ascending seconds, starting at zero
             var values: [Float] // one weight per morph channel per key, flattened
         }
 
@@ -97,23 +97,11 @@ struct SceneData {
 
     struct Texture {
         /// How the sampler repeats outside [0,1], per axis.
-        enum Wrap: Hashable {
-            case repeating
-            case clampU
-            case clampV
-            case clampBoth
+        struct Wrap: Hashable {
+            static let repeating = Wrap(clampsU: false, clampsV: false)
 
-            init(clampsU: Bool, clampsV: Bool) {
-                switch (clampsU, clampsV) {
-                case (false, false): self = .repeating
-                case (true, false): self = .clampU
-                case (false, true): self = .clampV
-                case (true, true): self = .clampBoth
-                }
-            }
-
-            var clampsU: Bool { self == .clampU || self == .clampBoth }
-            var clampsV: Bool { self == .clampV || self == .clampBoth }
+            var clampsU: Bool
+            var clampsV: Bool
         }
 
         var name: String?

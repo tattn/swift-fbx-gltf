@@ -108,11 +108,18 @@ private struct ExtractionContext {
         let meshName = String(ufbx: mesh.pointee.name)
         let skin = firstSkinDeformer(of: mesh, meshName: meshName)
         let morphs = morphSources(of: mesh)
+        // FBX vertex colors are conventionally sRGB (Blender both writes and
+        // reads them that way) while glTF requires linear. Converting the value
+        // table once keeps the transfer function out of the per-corner loop.
+        let linearColors = mesh.pointee.vertex_color.exists
+            ? Self.linearColorValues(of: mesh.pointee.vertex_color)
+            : []
 
         var primitives: [SceneData.Primitive] = []
         for part in list(mesh.pointee.material_parts) {
             guard let primitive = extractPrimitive(
-                mesh, part: part, instanceMaterials: instanceMaterials, skin: skin, morphs: morphs
+                mesh, part: part, instanceMaterials: instanceMaterials,
+                skin: skin, morphs: morphs, linearColors: linearColors
             ) else { continue }
             primitives.append(primitive)
         }
@@ -161,7 +168,8 @@ private struct ExtractionContext {
                     name: String(ufbx: channel.pointee.name) ?? String(ufbx: shape.pointee.name),
                     defaultWeight: Float(channel.pointee.weight),
                     channelElementId: channel.pointee.element_id,
-                    shape: shape
+                    shape: shape,
+                    vertexCount: mesh.pointee.num_vertices
                 ))
             }
         }
@@ -173,7 +181,8 @@ private struct ExtractionContext {
         part: ufbx_mesh_part,
         instanceMaterials: [UnsafeMutablePointer<ufbx_material>?],
         skin: UnsafeMutablePointer<ufbx_skin_deformer>?,
-        morphs: [MorphSource]
+        morphs: [MorphSource],
+        linearColors: [(Float, Float, Float, Float)]
     ) -> SceneData.Primitive? {
         guard part.num_triangles > 0 else { return nil }
 
@@ -195,12 +204,10 @@ private struct ExtractionContext {
         if colors.exists { primitive.colors.reserveCapacity(cornerCount * 4) }
         primitive.indices.reserveCapacity(cornerCount)
 
-        // FBX vertex colors are conventionally sRGB (Blender both writes and
-        // reads them that way) while glTF requires linear. Converting the value
-        // table once keeps the transfer function out of the per-corner loop.
-        let linearColors = colors.exists ? Self.linearColorValues(of: colors) : []
-
         var controlPoints: [UInt32] = []
+        if weldByControlPoint {
+            controlPoints.reserveCapacity(cornerCount)
+        }
         var vertices = VertexTable(minimumCapacity: cornerCount)
         var triangleIndexBuffer = [UInt32](repeating: 0, count: max(mesh.pointee.max_face_triangles * 3, 3))
 
@@ -419,17 +426,8 @@ private struct ExtractionContext {
         roughTexture: UnsafeMutablePointer<ufbx_texture>?,
         invertRoughness: Bool
     ) -> Int? {
-        func rawData(_ texture: UnsafeMutablePointer<ufbx_texture>?) -> Data? {
-            guard let texture else { return nil }
-            guard let data = textureData(texture) else {
-                let name = String(ufbx: texture.pointee.name) ?? "?"
-                addWarning("Texture file for \"\(name)\" was not found; the material factor is kept.")
-                return nil
-            }
-            return data
-        }
-        let metallic = rawData(metalTexture)
-        let roughness = rawData(roughTexture)
+        let metallic = metalTexture.flatMap { textureData($0, missingConsequence: "the material factor is kept") }
+        let roughness = roughTexture.flatMap { textureData($0, missingConsequence: "the material factor is kept") }
         guard metallic != nil || roughness != nil else { return nil }
         guard let packed = TextureEncoder.packMetallicRoughness(
             metallic: metallic, roughness: roughness, invertRoughness: invertRoughness
@@ -439,7 +437,7 @@ private struct ExtractionContext {
         }
 
         // Wrapping comes from whichever source texture exists
-        return appendTexture(name: "metallicRoughness", encoded: packed, wrap: (roughTexture ?? metalTexture)?.wrap)
+        return appendTexture(name: "metallicRoughness", encoded: packed, wrap: (roughTexture ?? metalTexture).map(SceneData.Texture.Wrap.init(of:)))
     }
 
     /// Adds an encoded image to the IR and returns its index.
@@ -468,8 +466,7 @@ private struct ExtractionContext {
 
     private mutating func loadTexture(_ texture: UnsafeMutablePointer<ufbx_texture>) -> Int? {
         let name = String(ufbx: texture.pointee.name)
-        guard let rawData = textureData(texture) else {
-            addWarning("Texture file for \"\(name ?? "?")\" was not found; the material color is kept.")
+        guard let rawData = textureData(texture, missingConsequence: "the material color is kept") else {
             return nil
         }
         guard let encoded = TextureEncoder.normalize(rawData) else {
@@ -477,10 +474,23 @@ private struct ExtractionContext {
             return nil
         }
 
-        return appendTexture(name: name, encoded: encoded, wrap: texture.wrap)
+        return appendTexture(name: name, encoded: encoded, wrap: .init(of: texture))
     }
 
-    private func textureData(_ texture: UnsafeMutablePointer<ufbx_texture>) -> Data? {
+    /// The texture's image bytes, warning with `missingConsequence` when the
+    /// file cannot be found.
+    private mutating func textureData(
+        _ texture: UnsafeMutablePointer<ufbx_texture>, missingConsequence: String
+    ) -> Data? {
+        guard let data = rawTextureData(texture) else {
+            let name = String(ufbx: texture.pointee.name) ?? "?"
+            addWarning("Texture file for \"\(name)\" was not found; \(missingConsequence).")
+            return nil
+        }
+        return data
+    }
+
+    private func rawTextureData(_ texture: UnsafeMutablePointer<ufbx_texture>) -> Data? {
         let content = texture.pointee.content
         if content.size > 0, let bytes = content.data {
             return Data(bytes: bytes, count: content.size)
@@ -586,7 +596,7 @@ private struct ExtractionContext {
         var curvesByMesh: [Int: [Int: ufbx_baked_vec3_list]] = [:]
         for bakedElement in list(baked.pointee.elements) {
             guard let slot = morphSlotsByElementId[bakedElement.element_id] else { continue }
-            for prop in list(bakedElement.props) where String(ufbx: prop.name) == "DeformPercent" {
+            for prop in list(bakedElement.props) where String(ufbx: prop.name) == UFBX_DeformPercent {
                 guard prop.keys.count > 0 else { continue }
                 curvesByMesh[slot.meshIndex, default: [:]][slot.slot] = prop.keys
             }
@@ -594,6 +604,7 @@ private struct ExtractionContext {
 
         return curvesByMesh.sorted { $0.key < $1.key }.map { meshIndex, curves in
             let channels = data.meshes[meshIndex].morphChannels
+            let curveBySlot = channels.indices.map { curves[$0] }
             var keyTimes = Set<Double>()
             for keys in curves.values {
                 for key in list(keys) {
@@ -605,7 +616,7 @@ private struct ExtractionContext {
             values.reserveCapacity(times.count * channels.count)
             for time in times {
                 for slot in channels.indices {
-                    guard let keys = curves[slot] else {
+                    guard let keys = curveBySlot[slot] else {
                         values.append(channels[slot].defaultWeight)
                         continue
                     }
@@ -672,13 +683,33 @@ private struct ExtractionContext {
     }
 }
 
-/// One blend-shape channel. The offsets stay in ufbx's sparse storage, which
-/// indexes them per control point on demand.
+/// One blend-shape channel, with the sparse offsets scattered once into a
+/// per-control-point table so densification is a direct load per vertex.
 private struct MorphSource {
     var name: String?
     var defaultWeight: Float
     var channelElementId: UInt32
-    var shape: UnsafeMutablePointer<ufbx_blend_shape>
+    private var shape: UnsafeMutablePointer<ufbx_blend_shape>
+    /// Control point to offset-slot table; `UFBX_NO_INDEX` marks no offset.
+    private var offsetSlots: [UInt32]
+
+    init(
+        name: String?,
+        defaultWeight: Float,
+        channelElementId: UInt32,
+        shape: UnsafeMutablePointer<ufbx_blend_shape>,
+        vertexCount: Int
+    ) {
+        self.name = name
+        self.defaultWeight = defaultWeight
+        self.channelElementId = channelElementId
+        self.shape = shape
+        offsetSlots = [UInt32](repeating: UFBX_NO_INDEX, count: vertexCount)
+        // ufbx documents that offset vertices can lie outside the mesh
+        for (slot, vertex) in list(shape.pointee.offset_vertices).enumerated() where Int(vertex) < vertexCount {
+            offsetSlots[Int(vertex)] = UInt32(slot)
+        }
+    }
 
     /// Densifies the sparse offsets over a primitive's welded vertices.
     func target(for controlPoints: [UInt32]) -> SceneData.MorphTarget {
@@ -689,7 +720,7 @@ private struct MorphSource {
             normalDeltas: normalOffsets.isEmpty ? [] : [Float](repeating: 0, count: controlPoints.count * 3)
         )
         for (vertex, controlPoint) in controlPoints.enumerated() {
-            let offset = ufbx_get_blend_shape_offset_index(shape, Int(controlPoint))
+            let offset = offsetSlots[Int(controlPoint)]
             guard offset != UFBX_NO_INDEX else { continue }
             let position = positionOffsets[Int(offset)]
             target.positionDeltas[vertex * 3] = Float(position.x)
@@ -711,6 +742,15 @@ private struct MorphSource {
 private struct MeshInstanceKey: Hashable {
     var mesh: UnsafeRawPointer
     var materials: [UnsafeMutablePointer<ufbx_material>?]
+}
+
+private extension SceneData.Texture.Wrap {
+    init(of texture: UnsafeMutablePointer<ufbx_texture>) {
+        self.init(
+            clampsU: texture.pointee.wrap_u == UFBX_WRAP_CLAMP,
+            clampsV: texture.pointee.wrap_v == UFBX_WRAP_CLAMP
+        )
+    }
 }
 
 private struct PackedTextureKey: Hashable {
@@ -736,7 +776,7 @@ private struct TextureKey: Hashable {
         } else {
             identity = .object(UnsafeRawPointer(texture))
         }
-        wrap = texture.wrap
+        wrap = .init(of: texture)
     }
 }
 

@@ -51,14 +51,13 @@ struct FixtureConversionTests {
 
     /// A 7-gon has to survive triangulation as a five-triangle fan.
     @Test func triangulatesPolygonsWithMoreThanFourCorners() throws {
-        let (glb, _, json) = try convert("character_scene")
+        let (_, _, json) = try convert("character_scene")
         let signboard = try #require(try meshes(json).first { $0["name"] as? String == "看板メッシュ" })
         let primitive = try #require((signboard["primitives"] as? [[String: Any]])?.first)
         let accessors = try #require(json["accessors"] as? [[String: Any]])
         let indicesAccessor = try #require(primitive["indices"] as? Int)
         let indexCount = try #require(accessors[indicesAccessor]["count"] as? Int)
         #expect(indexCount / 3 == 5)
-        #expect(glb.count > 0)
     }
 
     @Test func keepsNonASCIINodeNames() throws {

@@ -51,7 +51,8 @@ enum GLTFBuilder {
         var samplerByWrap: [SceneData.Texture.Wrap: Int] = [:]
 
         for texture in scene.textures {
-            images.append(buffer.appendImage(name: texture.name, mimeType: texture.mimeType, data: texture.data))
+            let view = buffer.appendImageData(texture.data)
+            images.append(.init(name: texture.name, mimeType: texture.mimeType, bufferView: view))
             // The default sampler already repeats, so only clamping needs one
             guard texture.wrap != .repeating else {
                 textures.append(.init(source: images.count - 1))
@@ -87,47 +88,29 @@ enum GLTFBuilder {
     private static func appendPrimitive(
         _ primitive: SceneData.Primitive, to buffer: inout BufferBuilder
     ) -> GLTFDocument.Mesh.Primitive {
+        // The spec requires bounds on POSITION accessors, base and morph alike
+        func addPositions(_ values: [Float]) -> Int {
+            buffer.addAccessor(values, type: .vec3, target: .arrayBuffer, bounds: tripletBounds(of: values))
+        }
+
         var attributes: [String: Int] = [:]
-        attributes["POSITION"] = buffer.addAccessor(
-            primitive.positions, componentType: .float, type: .vec3, target: .arrayBuffer,
-            bounds: tripletBounds(of: primitive.positions)
-        )
-        attributes["NORMAL"] = buffer.addAccessor(
-            primitive.normals, componentType: .float, type: .vec3, target: .arrayBuffer
-        )
+        attributes["POSITION"] = addPositions(primitive.positions)
+        attributes["NORMAL"] = buffer.addAccessor(primitive.normals, type: .vec3, target: .arrayBuffer)
         if !primitive.uvs.isEmpty {
-            attributes["TEXCOORD_0"] = buffer.addAccessor(
-                primitive.uvs, componentType: .float, type: .vec2, target: .arrayBuffer
-            )
+            attributes["TEXCOORD_0"] = buffer.addAccessor(primitive.uvs, type: .vec2, target: .arrayBuffer)
         }
         if !primitive.colors.isEmpty {
-            attributes["COLOR_0"] = buffer.addAccessor(
-                primitive.colors, componentType: .float, type: .vec4, target: .arrayBuffer
-            )
+            attributes["COLOR_0"] = buffer.addAccessor(primitive.colors, type: .vec4, target: .arrayBuffer)
         }
         if !primitive.joints.isEmpty {
-            attributes["JOINTS_0"] = buffer.addAccessor(
-                primitive.joints, componentType: .unsignedShort, type: .vec4, target: .arrayBuffer
-            )
-            attributes["WEIGHTS_0"] = buffer.addAccessor(
-                primitive.weights, componentType: .float, type: .vec4, target: .arrayBuffer
-            )
+            attributes["JOINTS_0"] = buffer.addAccessor(primitive.joints, type: .vec4, target: .arrayBuffer)
+            attributes["WEIGHTS_0"] = buffer.addAccessor(primitive.weights, type: .vec4, target: .arrayBuffer)
         }
-        let indices = buffer.addAccessor(
-            primitive.indices, componentType: .unsignedInt, type: .scalar, target: .elementArrayBuffer
-        )
+        let indices = buffer.addAccessor(primitive.indices, type: .scalar, target: .elementArrayBuffer)
         let targets = primitive.morphTargets.map { target -> [String: Int] in
-            // The spec requires bounds on morph POSITION deltas as well
-            var accessorsByAttribute = [
-                "POSITION": buffer.addAccessor(
-                    target.positionDeltas, componentType: .float, type: .vec3, target: .arrayBuffer,
-                    bounds: tripletBounds(of: target.positionDeltas)
-                ),
-            ]
+            var accessorsByAttribute = ["POSITION": addPositions(target.positionDeltas)]
             if !target.normalDeltas.isEmpty {
-                accessorsByAttribute["NORMAL"] = buffer.addAccessor(
-                    target.normalDeltas, componentType: .float, type: .vec3, target: .arrayBuffer
-                )
+                accessorsByAttribute["NORMAL"] = buffer.addAccessor(target.normalDeltas, type: .vec3, target: .arrayBuffer)
             }
             return accessorsByAttribute
         }
@@ -142,18 +125,19 @@ enum GLTFBuilder {
     private static func appendSkins(of scene: SceneData, to buffer: inout BufferBuilder) -> [GLTFDocument.Skin] {
         scene.skins.map { skin in
             GLTFDocument.Skin(
-                inverseBindMatrices: buffer.addAccessor(
-                    skin.inverseBindMatrices, componentType: .float, type: .mat4
-                ),
+                inverseBindMatrices: buffer.addAccessor(skin.inverseBindMatrices, type: .mat4),
                 joints: skin.jointNodeIndices
             )
         }
     }
 
     private static func appendAnimations(of scene: SceneData, to buffer: inout BufferBuilder) -> [GLTFDocument.Animation] {
-        let nodesByMesh = Dictionary(grouping: scene.nodes.indices.compactMap { index in
-            scene.nodes[index].meshIndex.map { (mesh: $0, node: index) }
-        }, by: \.mesh).mapValues { $0.map(\.node) }
+        var nodesByMesh: [Int: [Int]] = [:]
+        for (index, node) in scene.nodes.enumerated() {
+            if let mesh = node.meshIndex {
+                nodesByMesh[mesh, default: []].append(index)
+            }
+        }
 
         return scene.animations.map { animation in
             var samplers: [GLTFDocument.Animation.Sampler] = []
@@ -162,10 +146,9 @@ enum GLTFBuilder {
             /// The spec requires bounds on every animation input accessor.
             func addSampler(times: [Float], values: [Float], type: GLTFDocument.AccessorType) -> Int {
                 let input = buffer.addAccessor(
-                    times, componentType: .float, type: .scalar,
-                    bounds: (min: [times.first ?? 0], max: [times.last ?? 0])
+                    times, type: .scalar, bounds: (min: [times.first ?? 0], max: [times.last ?? 0])
                 )
-                let output = buffer.addAccessor(values, componentType: .float, type: type)
+                let output = buffer.addAccessor(values, type: type)
                 samplers.append(.init(input: input, output: output))
                 return samplers.count - 1
             }
@@ -254,21 +237,18 @@ private struct BufferBuilder {
     private(set) var accessors: [GLTFDocument.Accessor] = []
 
     /// Stores `values` and returns the index of the accessor describing them.
-    mutating func addAccessor<T>(
+    mutating func addAccessor<T: GLTFComponent>(
         _ values: [T],
-        componentType: GLTFDocument.ComponentType,
         type: GLTFDocument.AccessorType,
         target: GLTFDocument.BufferTarget? = nil,
         bounds: (min: [Float], max: [Float])? = nil
     ) -> Int {
         let view = appendBufferView(target: target) { data in
             values.withUnsafeBufferPointer { data.append($0) }
-            // `Data.append` writes one stride per element, so the view must span the same
-            return values.count * MemoryLayout<T>.stride
         }
         accessors.append(.init(
             bufferView: view,
-            componentType: componentType,
+            componentType: T.componentType,
             count: values.count / type.componentCount,
             type: type,
             min: bounds?.min,
@@ -277,26 +257,43 @@ private struct BufferBuilder {
         return accessors.count - 1
     }
 
-    mutating func appendImage(name: String?, mimeType: String, data payload: Data) -> GLTFDocument.Image {
-        let view = appendBufferView(target: nil) { data in
+    /// Stores an encoded image and returns the index of its buffer view.
+    mutating func appendImageData(_ payload: Data) -> Int {
+        appendBufferView(target: nil) { data in
             data.append(payload)
-            return payload.count
         }
-        return .init(name: name, mimeType: mimeType, bufferView: view)
     }
 
     private mutating func appendBufferView(
-        target: GLTFDocument.BufferTarget?, write: (inout Data) -> Int
+        target: GLTFDocument.BufferTarget?, write: (inout Data) -> Void
     ) -> Int {
         let padding = data.count.alignedToFour - data.count
         if padding > 0 {
             data.append(contentsOf: repeatElement(0, count: padding))
         }
         let offset = data.count
-        let length = write(&data)
-        bufferViews.append(.init(byteOffset: offset, byteLength: length, target: target))
+        write(&data)
+        bufferViews.append(.init(byteOffset: offset, byteLength: data.count - offset, target: target))
         return bufferViews.count - 1
     }
+}
+
+/// Element types storable in accessors, tied to the component type glTF
+/// declares for them so the two cannot disagree.
+protocol GLTFComponent {
+    static var componentType: GLTFDocument.ComponentType { get }
+}
+
+extension Float: GLTFComponent {
+    static var componentType: GLTFDocument.ComponentType { .float }
+}
+
+extension UInt16: GLTFComponent {
+    static var componentType: GLTFDocument.ComponentType { .unsignedShort }
+}
+
+extension UInt32: GLTFComponent {
+    static var componentType: GLTFDocument.ComponentType { .unsignedInt }
 }
 
 private extension Array {

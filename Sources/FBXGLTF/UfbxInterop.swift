@@ -107,11 +107,6 @@ extension ufbx_vertex_vec2 {
 }
 
 extension ufbx_vertex_vec4 {
-    func vec4(at index: Int) -> (Float, Float, Float, Float) {
-        let value = values.data[valueIndex(at: index)]
-        return (Float(value.x), Float(value.y), Float(value.z), Float(value.w))
-    }
-
     /// Index into `values`, for callers that precompute a converted value table.
     func valueIndex(at index: Int) -> Int {
         ufbxAttributeIndex(indices.data[index])
@@ -145,12 +140,5 @@ extension SIMD3<Float> {
 extension SIMD4<Float> {
     init(_ value: ufbx_quat) {
         self.init(Float(value.x), Float(value.y), Float(value.z), Float(value.w))
-    }
-}
-
-extension UnsafeMutablePointer<ufbx_texture> {
-    /// The texture's wrap modes as the engine-agnostic pair.
-    var wrap: SceneData.Texture.Wrap {
-        .init(clampsU: pointee.wrap_u == UFBX_WRAP_CLAMP, clampsV: pointee.wrap_v == UFBX_WRAP_CLAMP)
     }
 }
