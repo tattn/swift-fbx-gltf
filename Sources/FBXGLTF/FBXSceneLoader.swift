@@ -501,10 +501,10 @@ private struct ExtractionContext {
             candidates.append(URL(fileURLWithPath: absolute))
         }
         if let relative = String(ufbx: texture.pointee.filename) {
-            candidates.append(baseURL.appendingPathComponent(relative))
+            candidates.append(baseURL.appending(path: relative))
             // Textures often move next to the FBX after being exported on another machine
             let fileName = URL(fileURLWithPath: relative).lastPathComponent
-            candidates.append(baseURL.appendingPathComponent(fileName))
+            candidates.append(baseURL.appending(path: fileName))
         }
         for candidate in candidates {
             if let data = try? Data(contentsOf: candidate) {
