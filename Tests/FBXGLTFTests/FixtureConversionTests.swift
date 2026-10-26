@@ -6,9 +6,9 @@ import Testing
 /// distinct converter behaviour, so a failure names the feature that regressed
 /// rather than just reporting that some bytes moved.
 struct FixtureConversionTests {
-    private func convert(_ name: String) throws -> (glb: Data, summary: FBXToGLBConverter.Summary, json: [String: Any]) {
+    private func convert(_ name: String) throws -> (glb: Data, summary: GLBConverter.Summary, json: [String: Any]) {
         let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "fbx"))
-        let result = try FBXToGLBConverter().convert(contentsOf: url)
+        let result = try GLBConverter().convert(contentsOf: url)
         return (result.glb, result.summary, try #require(result.glb.jsonChunk()))
     }
 

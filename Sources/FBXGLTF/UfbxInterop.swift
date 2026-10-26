@@ -74,6 +74,10 @@ func list(_ list: ufbx_baked_quat_list) -> UnsafeBufferPointer<ufbx_baked_quat> 
     UnsafeBufferPointer(start: list.data, count: list.count)
 }
 
+func list(_ list: ufbx_warning_list) -> UnsafeBufferPointer<ufbx_warning> {
+    UnsafeBufferPointer(start: list.data, count: list.count)
+}
+
 func list(_ list: ufbx_baked_element_list) -> UnsafeBufferPointer<ufbx_baked_element> {
     UnsafeBufferPointer(start: list.data, count: list.count)
 }

@@ -14,8 +14,8 @@ let package = Package(
             targets: ["FBXGLTF"]
         ),
         .executable(
-            name: "fbx2glb",
-            targets: ["fbx2glb"]
+            name: "model2glb",
+            targets: ["model2glb"]
         ),
     ],
     targets: [
@@ -28,7 +28,7 @@ let package = Package(
             dependencies: ["CUfbx"]
         ),
         .executableTarget(
-            name: "fbx2glb",
+            name: "model2glb",
             dependencies: ["FBXGLTF"]
         ),
         .testTarget(

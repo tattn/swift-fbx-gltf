@@ -1,33 +1,41 @@
 public import Foundation
 
-public enum FBXGLTFError: Error, LocalizedError {
+public enum GLBConversionError: Error, LocalizedError {
     case loadFailed(String)
     case encodingFailed(any Error)
 
     public var errorDescription: String? {
         switch self {
         case .loadFailed(let message):
-            "Failed to load the FBX file: \(message)"
+            "Failed to load the model file: \(message)"
         case .encodingFailed(let error):
             "Failed to encode the glTF document: \(error)"
         }
     }
 }
 
-/// Converts an FBX file into a self-contained GLB (binary glTF 2.0).
+/// Converts an FBX or Wavefront OBJ file into a self-contained GLB (binary glTF 2.0).
 ///
 /// The output is normalized to the glTF conventions (right-handed Y-up, meters,
 /// linear colors) and embeds all textures. Skeletons, skinning, blend shapes and
 /// animations are converted; anything the converter has to approximate or drop
 /// is reported through ``Summary/warnings``.
-public struct FBXToGLBConverter: Sendable {
+public struct GLBConverter: Sendable {
+    /// Lowercased extensions of the files this converter reads. An OBJ file brings
+    /// its `.mtl` material library and textures along from the same folder.
+    public static let supportedFileExtensions: Set<String> = ["fbx", "obj"]
+
     public struct Options: Sendable {
         /// The unit in meters the scene is scaled to. The default of 1.0 converts
-        /// FBX files authored in centimeters or other units into meters.
+        /// files authored in centimeters or other units into meters.
         public var targetUnitMeters: Double
+        /// The unit in meters an OBJ file is read in. OBJ does not record its
+        /// unit; the default of 1.0 matches Blender's and glTF's.
+        public var objUnitMeters: Double
 
-        public init(targetUnitMeters: Double = 1.0) {
+        public init(targetUnitMeters: Double = 1.0, objUnitMeters: Double = 1.0) {
             self.targetUnitMeters = targetUnitMeters
+            self.objUnitMeters = objUnitMeters
         }
     }
 
@@ -55,8 +63,8 @@ public struct FBXToGLBConverter: Sendable {
         self.options = options
     }
 
-    public func convert(contentsOf url: URL) throws(FBXGLTFError) -> Result {
-        let scene = try FBXSceneLoader(targetUnitMeters: options.targetUnitMeters).load(contentsOf: url)
+    public func convert(contentsOf url: URL) throws(GLBConversionError) -> Result {
+        let scene = try SceneLoader(options: options).load(contentsOf: url)
         let glb = try GLTFBuilder.buildGLB(from: scene)
         let summary = Summary(
             nodeCount: scene.nodes.count,

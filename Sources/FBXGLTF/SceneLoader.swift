@@ -1,18 +1,27 @@
 import CUfbx
 import Foundation
 
-/// Loads an FBX file with ufbx and extracts a `SceneData`.
-struct FBXSceneLoader {
-    /// The unit in meters the scene is scaled to.
-    var targetUnitMeters: Double
+/// Loads an FBX or OBJ file with ufbx and extracts a `SceneData`.
+struct SceneLoader {
+    let options: GLBConverter.Options
 
-    func load(contentsOf url: URL) throws(FBXGLTFError) -> SceneData {
+    func load(contentsOf url: URL) throws(GLBConversionError) -> SceneData {
         var loadOptions = ufbx_load_opts()
         loadOptions.generate_missing_normals = true
         // Normalize to the glTF conventions: right-handed Y-up, meters.
         loadOptions.target_axes = ufbx_axes_right_handed_y_up
-        loadOptions.target_unit_meters = ufbx_real(targetUnitMeters)
+        loadOptions.target_unit_meters = ufbx_real(options.targetUnitMeters)
         loadOptions.space_conversion = UFBX_SPACE_CONVERSION_ADJUST_TRANSFORMS
+        // OBJ records neither its unit nor its axes, and ufbx converts neither
+        // unless told what the file is in.
+        loadOptions.obj_unit_meters = ufbx_real(options.objUnitMeters)
+        loadOptions.obj_axes = ufbx_axes_right_handed_y_up
+        // An OBJ's materials live in its .mtl library. A library that moved or was
+        // renamed with the OBJ is still found by the OBJ's own name, and a missing
+        // one leaves the geometry without materials rather than failing.
+        loadOptions.load_external_files = true
+        loadOptions.ignore_missing_external_files = true
+        loadOptions.obj_search_mtl_by_filename = true
         // Bake FBX geometric transforms (pivot offsets) into extra nodes so
         // the node hierarchy stays valid for formats without them.
         loadOptions.geometry_transform_handling = UFBX_GEOMETRY_TRANSFORM_HANDLING_HELPER_NODES
@@ -23,11 +32,12 @@ struct FBXSceneLoader {
 
         var error = ufbx_error()
         guard let scene = ufbx_load_file(url.path, &loadOptions, &error) else {
-            throw FBXGLTFError.loadFailed(Self.message(from: &error))
+            throw GLBConversionError.loadFailed(Self.message(from: &error))
         }
         defer { ufbx_free_scene(scene) }
 
         var context = ExtractionContext(baseURL: url.deletingLastPathComponent())
+        context.reportMissingExternalFiles(scene)
         if let rootNode = scene.pointee.root_node {
             for child in list(rootNode.pointee.children) {
                 guard let child else { continue }
@@ -378,7 +388,7 @@ private struct ExtractionContext {
     /// procedural and layered textures by the first file they reference.
     private mutating func resolveFileTexture(of map: ufbx_material_map) -> UnsafeMutablePointer<ufbx_texture>? {
         guard map.texture_enabled, let texture = map.texture else { return nil }
-        let name = String(ufbx: texture.pointee.name) ?? "?"
+        let name = Self.name(of: texture) ?? "?"
         var resolved = texture
         if texture.pointee.type != UFBX_TEXTURE_FILE {
             guard let file = list(texture.pointee.file_textures)
@@ -465,7 +475,7 @@ private struct ExtractionContext {
     }
 
     private mutating func loadTexture(_ texture: UnsafeMutablePointer<ufbx_texture>) -> Int? {
-        let name = String(ufbx: texture.pointee.name)
+        let name = Self.name(of: texture)
         guard let rawData = textureData(texture, missingConsequence: "the material color is kept") else {
             return nil
         }
@@ -483,11 +493,20 @@ private struct ExtractionContext {
         _ texture: UnsafeMutablePointer<ufbx_texture>, missingConsequence: String
     ) -> Data? {
         guard let data = rawTextureData(texture) else {
-            let name = String(ufbx: texture.pointee.name) ?? "?"
+            let name = Self.name(of: texture) ?? "?"
             addWarning("Texture file for \"\(name)\" was not found; \(missingConsequence).")
             return nil
         }
         return data
+    }
+
+    /// OBJ textures are unnamed, so they go by their file name.
+    private static func name(of texture: UnsafeMutablePointer<ufbx_texture>) -> String? {
+        if let name = String(ufbx: texture.pointee.name) {
+            return name
+        }
+        let path = [texture.pointee.filename, texture.pointee.relative_filename].lazy.compactMap(String.init(ufbx:)).first
+        return path.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent }
     }
 
     private func rawTextureData(_ texture: UnsafeMutablePointer<ufbx_texture>) -> Data? {
@@ -500,9 +519,10 @@ private struct ExtractionContext {
         if let absolute = String(ufbx: texture.pointee.absolute_filename) {
             candidates.append(URL(fileURLWithPath: absolute))
         }
-        if let relative = String(ufbx: texture.pointee.filename) {
+        // OBJ materials only carry the path written in the .mtl file
+        for relative in [texture.pointee.filename, texture.pointee.relative_filename].compactMap(String.init(ufbx:)) {
             candidates.append(baseURL.appending(path: relative))
-            // Textures often move next to the FBX after being exported on another machine
+            // Textures often move next to the model after being exported on another machine
             let fileName = URL(fileURLWithPath: relative).lastPathComponent
             candidates.append(baseURL.appending(path: fileName))
         }
@@ -674,6 +694,19 @@ private struct ExtractionContext {
             channel.values.append(Float(value.w))
         }
         return channel
+    }
+
+    // MARK: - Warnings
+
+    /// A missing .mtl library is not fatal: its materials keep their default values.
+    mutating func reportMissingExternalFiles(_ scene: UnsafeMutablePointer<ufbx_scene>) {
+        let warnings = list(scene.pointee.metadata.warnings)
+        // The library found by the OBJ's own name stands in for the missing one
+        guard !warnings.contains(where: { $0.type == UFBX_WARNING_IMPLICIT_MTL }) else { return }
+        for warning in warnings where warning.type == UFBX_WARNING_MISSING_EXTERNAL_FILE {
+            let description = String(ufbx: warning.description) ?? "Could not open an external file"
+            addWarning("\(description); the materials it defines keep their default values.")
+        }
     }
 
     private mutating func addWarning(_ warning: String) {

@@ -1,0 +1,8 @@
+# A triangle whose mtllib line names a library that was renamed
+mtllib exported_materials.mtl
+o Triangle
+v 0 0 0
+v 1 0 0
+v 0 1 0
+usemtl red
+f 1 2 3

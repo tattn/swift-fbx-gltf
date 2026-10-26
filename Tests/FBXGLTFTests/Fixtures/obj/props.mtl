@@ -1,0 +1,8 @@
+# Materials for props.obj
+newmtl wood
+Kd 1 1 1
+map_Kd textures/checker.png
+
+newmtl glass
+Kd 0.2 0.4 0.8
+d 0.5

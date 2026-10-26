@@ -1,6 +1,6 @@
 import Foundation
 
-/// Engine-agnostic intermediate representation extracted from an FBX scene.
+/// Engine-agnostic intermediate representation extracted from a ufbx scene.
 /// Keeps the ufbx interop isolated from the glTF serialization.
 struct SceneData {
     struct Node {

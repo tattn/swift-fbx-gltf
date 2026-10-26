@@ -3,7 +3,7 @@ import Foundation
 
 let arguments = CommandLine.arguments.dropFirst()
 guard let inputPath = arguments.first, arguments.count <= 2 else {
-    FileHandle.standardError.write(Data("usage: fbx2glb <input.fbx> [output.glb]\n".utf8))
+    FileHandle.standardError.write(Data("usage: model2glb <input.fbx|input.obj> [output.glb]\n".utf8))
     exit(64)
 }
 
@@ -13,7 +13,7 @@ let outputURL = arguments.count == 2
     : inputURL.deletingPathExtension().appendingPathExtension("glb")
 
 do {
-    let summary = try FBXToGLBConverter().convert(contentsOf: inputURL, to: outputURL)
+    let summary = try GLBConverter().convert(contentsOf: inputURL, to: outputURL)
     print("\(inputURL.lastPathComponent) -> \(outputURL.lastPathComponent)")
     print("  nodes: \(summary.nodeCount), meshes: \(summary.meshCount), primitives: \(summary.primitiveCount), triangles: \(summary.triangleCount)")
     print("  materials: \(summary.materialCount), textures: \(summary.textureCount), animations: \(summary.animationCount), size: \(summary.byteCount) bytes")

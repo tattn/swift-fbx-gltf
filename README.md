@@ -1,10 +1,11 @@
 # swift-fbx-gltf
 
-A Swift package that converts FBX files into self-contained GLB (binary glTF 2.0) files, powered by [ufbx](https://github.com/ufbx/ufbx).
+A Swift package that converts FBX and Wavefront OBJ files into self-contained GLB (binary glTF 2.0) files, powered by [ufbx](https://github.com/ufbx/ufbx).
 
 ## Features
 
-- Converts FBX (binary/ASCII, all versions supported by ufbx) to GLB
+- Converts FBX (binary/ASCII, all versions supported by ufbx) and OBJ to GLB
+- Reads an OBJ's materials from its `.mtl` library, falling back to the library named after the OBJ when the `mtllib` path is gone
 - Normalizes the scene to glTF conventions: right-handed Y-up, meters
 - Node hierarchy with transforms, triangulated meshes (positions/normals/UVs/vertex colors), and vertex deduplication
 - Vertex colors are converted from FBX's conventional sRGB to the linear values glTF requires
@@ -21,7 +22,7 @@ A Swift package that converts FBX files into self-contained GLB (binary glTF 2.0
 ```swift
 import FBXGLTF
 
-let converter = FBXToGLBConverter()
+let converter = GLBConverter()
 let summary = try converter.convert(
     contentsOf: URL(filePath: "model.fbx"),
     to: URL(filePath: "model.glb")
@@ -29,10 +30,12 @@ let summary = try converter.convert(
 print(summary.warnings)
 ```
 
+`GLBConverter.supportedFileExtensions` lists the extensions it reads (`fbx`, `obj`), for filtering file pickers. An OBJ is read with the `.mtl` library and textures beside it. OBJ does not record its unit or axes, so it is read as Y-up meters; set `Options.objUnitMeters` when the files come from a tool that writes another unit.
+
 A command line tool is also included:
 
 ```sh
-swift run fbx2glb model.fbx [model.glb]
+swift run model2glb model.fbx [model.glb]
 ```
 
 ## Limitations

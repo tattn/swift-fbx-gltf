@@ -2,7 +2,7 @@ import Foundation
 
 /// Builds a GLB payload (glTF JSON + binary buffer) from a `SceneData`.
 enum GLTFBuilder {
-    static func buildGLB(from scene: SceneData) throws(FBXGLTFError) -> Data {
+    static func buildGLB(from scene: SceneData) throws(GLBConversionError) -> Data {
         var buffer = BufferBuilder()
         let images = appendImages(of: scene, to: &buffer)
         let meshes = appendMeshes(of: scene, to: &buffer)
@@ -35,7 +35,7 @@ enum GLTFBuilder {
             json = try encoder.encode(document)
         } catch {
             // Most often a non-finite coordinate, which JSON cannot represent
-            throw FBXGLTFError.encodingFailed(error)
+            throw GLBConversionError.encodingFailed(error)
         }
         return GLBContainer.encode(json: json, binary: buffer.data)
     }
